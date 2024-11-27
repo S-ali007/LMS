@@ -96,16 +96,16 @@ const registerUser = asyncHandler(async (req, res) => {
 
 const loginUser = asyncHandler(async (req, res) => {
   // req body -> data
-  // username or email
+  //  email
   //find the user
   //password check
   //access and referesh token
   //send cookie
 
-  const { email, username, password } = req.body;
+  const { email, password } = req.body;
   console.log(email);
 
-  if (!username && !email) {
+  if (!email && !password) {
     throw new ApiError(400, "username or email is required");
   }
 
@@ -116,10 +116,10 @@ const loginUser = asyncHandler(async (req, res) => {
   // }
 
   const user = await User.findOne({
-    $or: [{ username }, { email }],
+    $or: [{ email }],
   });
 
-  if (!user) {
+  if (!email) {
     throw new ApiError(404, "User does not exist");
   }
 
@@ -339,132 +339,74 @@ const updateUserCoverImage = asyncHandler(async (req, res) => {
     .json(new ApiResponse(200, user, "Cover image updated successfully"));
 });
 
-const getUserChannelProfile = asyncHandler(async (req, res) => {
-  const { username } = req.params;
-
-  if (!username?.trim()) {
-    throw new ApiError(400, "username is missing");
+const getUserProfile = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.id;
+    const user = await User.findById(userId)
+      .select("-password")
+      .populate("enrolledCourses");
+    if (!user) {
+      return res.status(404).json({
+        message: "Profile not found",
+        success: false,
+      });
+    }
+    return res.status(200).json({
+      success: true,
+      user,
+    });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to load user",
+    });
   }
+});
+const updateProfile = asyncHandler(async (req, res) => {
+  try {
+    const userId = req.id;
+    const { name } = req.body;
+    const profilePhoto = req.file;
 
-  const channel = await User.aggregate([
-    {
-      $match: {
-        username: username?.toLowerCase(),
-      },
-    },
-    {
-      $lookup: {
-        from: "subscriptions",
-        localField: "_id",
-        foreignField: "channel",
-        as: "subscribers",
-      },
-    },
-    {
-      $lookup: {
-        from: "subscriptions",
-        localField: "_id",
-        foreignField: "subscriber",
-        as: "subscribedTo",
-      },
-    },
-    {
-      $addFields: {
-        subscribersCount: {
-          $size: "$subscribers",
-        },
-        channelsSubscribedToCount: {
-          $size: "$subscribedTo",
-        },
-        isSubscribed: {
-          $cond: {
-            if: { $in: [req.user?._id, "$subscribers.subscriber"] },
-            then: true,
-            else: false,
-          },
-        },
-      },
-    },
-    {
-      $project: {
-        fullName: 1,
-        username: 1,
-        subscribersCount: 1,
-        channelsSubscribedToCount: 1,
-        isSubscribed: 1,
-        avatar: 1,
-        coverImage: 1,
-        email: 1,
-      },
-    },
-  ]);
+    const user = await User.findById(userId);
+    if (!user) {
+      return res.status(404).json({
+        message: "User not found",
+        success: false,
+      });
+    }
+    // extract public id of the old image from the url is it exists;
+    if (user.photoUrl) {
+      const publicId = user.photoUrl.split("/").pop().split(".")[0]; // extract public id
+      deleteMediaFromCloudinary(publicId);
+    }
 
-  if (!channel?.length) {
-    throw new ApiError(404, "channel does not exists");
+    // upload new photo
+    const cloudResponse = await uploadMedia(profilePhoto.path);
+    const photoUrl = cloudResponse.secure_url;
+
+    const updatedData = { name, photoUrl };
+    const updatedUser = await User.findByIdAndUpdate(userId, updatedData, {
+      new: true,
+    }).select("-password");
+
+    return res.status(200).json({
+      success: true,
+      user: updatedUser,
+      message: "Profile updated successfully.",
+    });
+  } catch (error) {
+    console.log(error);
+    return res.status(500).json({
+      success: false,
+      message: "Failed to update profile",
+    });
   }
-
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(200, channel[0], "User channel fetched successfully")
-    );
 });
-
-const getWatchHistory = asyncHandler(async (req, res) => {
-  const user = await User.aggregate([
-    {
-      $match: {
-        _id: new mongoose.Types.ObjectId(req.user._id),
-      },
-    },
-    {
-      $lookup: {
-        from: "videos",
-        localField: "watchHistory",
-        foreignField: "_id",
-        as: "watchHistory",
-        pipeline: [
-          {
-            $lookup: {
-              from: "users",
-              localField: "owner",
-              foreignField: "_id",
-              as: "owner",
-              pipeline: [
-                {
-                  $project: {
-                    fullName: 1,
-                    username: 1,
-                    avatar: 1,
-                  },
-                },
-              ],
-            },
-          },
-          {
-            $addFields: {
-              owner: {
-                $first: "$owner",
-              },
-            },
-          },
-        ],
-      },
-    },
-  ]);
-
-  return res
-    .status(200)
-    .json(
-      new ApiResponse(
-        200,
-        user[0].watchHistory,
-        "Watch history fetched successfully"
-      )
-    );
-});
-
 export {
+  updateProfile,
+  getUserProfile,
   registerUser,
   loginUser,
   logoutUser,
@@ -474,6 +416,4 @@ export {
   updateAccountDetails,
   updateUserAvatar,
   updateUserCoverImage,
-  getUserChannelProfile,
-  getWatchHistory,
 };
